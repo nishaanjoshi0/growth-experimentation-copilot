@@ -271,7 +271,7 @@ All of the above use minimal dependencies (NumPy for algebra, SciPy only for CDF
 Every architectural decision in this system involves a tradeoff.
 
 **CUPED uses group-level rates as per-user metric proxy**
-The monitor agent builds CUPED rows using the snapshot-level conversion rate (one rate per variant per day) rather than individual user outcomes. This is a simplification — true CUPED requires per-user outcome data. The tradeoff: it keeps the storage schema simple (snapshots rather than per-user daily events) at the cost of reduced variance reduction. In production, per-user daily outcomes would be stored and CUPED would operate on individual rows. The current approach is documented as a known limitation.
+The monitor agent builds CUPED rows using the snapshot-level conversion rate (one rate per variant per day) rather than individual user outcomes. This is a simplification. True CUPED requires per-user outcome data. The tradeoff: it keeps the storage schema simple (snapshots rather than per-user daily events) at the cost of reduced variance reduction. In production, per-user daily outcomes would be stored and CUPED would operate on individual rows. The current approach is documented as a known limitation.
 
 **OLS slope instead of sklearn LinearRegression for CUPED**
 sklearn would produce identical results with less code. The choice of NumPy normal equations is deliberate as it forces explicit understanding of the theta computation and makes the implementation fully transparent. The cost is approximately five extra lines of code.
@@ -322,7 +322,7 @@ The current O'Brien-Fleming implementation is one-sided. Production sequential t
 The current system warns when a hypothesis mentions a marketplace but does not implement interference-robust experiment designs (switchback testing, cluster randomization, or synthetic control). For two-sided platforms or social products, SUTVA violations can invalidate standard A/B results entirely. A production system would route marketplace experiments to specialized design templates.
 
 **Experiment interaction detection**
-When multiple experiments run simultaneously on overlapping user populations, they can interact — a user in treatment for experiment A and treatment for experiment B creates a confounded cell. The current system has no awareness of concurrent experiments. Production systems (like Airbnb's ERF or Meta's PlanOut) include experiment registry checks and mutual exclusion logic.
+When multiple experiments run simultaneously on overlapping user populations, they can interact a user in treatment for experiment A and treatment for experiment B creates a confounded cell. The current system has no awareness of concurrent experiments. Production systems (like Airbnb's ERF or Meta's PlanOut) include experiment registry checks and mutual exclusion logic.
 
 **Scalable CUPED with per-user outcomes**
 The current CUPED implementation uses group-level snapshot rates as a proxy for per-user outcomes. At scale, CUPED should operate on individual user rows with their actual outcome values (converted: 1, not converted: 0) and a continuous pre-experiment covariate. This requires per-user event storage and a vectorized implementation that handles 10M+ rows efficiently.
