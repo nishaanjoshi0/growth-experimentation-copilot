@@ -176,7 +176,7 @@ flowchart TD
   B --> C[Build CUPED rows from snapshot rates]
   C --> D[Run CUPED, SRM, sequential, novelty]
   D --> E[Update snapshot flags in DB]
-  E --> F[Set decision: escalate | stop | continue]
+  E --> F[Set decision: escalate / stop / continue]
   F --> G[Log to agent_decisions]
   G --> H[Return MonitorResult]
 ```
