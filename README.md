@@ -19,14 +19,14 @@ Product and growth teams describe an experiment idea in plain language. The syst
 
 ## Tech Stack
 
-| Layer        | Technology                          |
-|-------------|--------------------------------------|
-| Frontend    | Streamlit                            |
-| Backend API | FastAPI                              |
+| Layer         | Technology                                |
+|--------------|-------------------------------------------|
+| Frontend     | Streamlit                                 |
+| Backend API  | FastAPI                                   |
 | Orchestration | LangGraph (StateGraph, conditional edges) |
-| LLM        | OpenAI GPT-4o mini                  |
-| Database   | Supabase (PostgreSQL)               |
-| Language   | Python 3.x                          |
+| LLM          | OpenAI GPT-4o mini                        |
+| Database     | Supabase (PostgreSQL)                     |
+| Language     | Python 3.13                               |
 
 ---
 
@@ -54,38 +54,37 @@ Product and growth teams describe an experiment idea in plain language. The syst
 │   └── main.py              # FastAPI app and endpoints
 ├── frontend/
 │   └── app.py               # Streamlit UI: New Experiment, Monitor, Interpret, Experiment History
-├── .env                     # Not committed; OPENAI_API_KEY, SUPABASE_URL, SUPABASE_KEY
 ├── .gitignore
 └── README.md
 ```
 
 ### Module roles
 
-- **backend/agents/designer.py**  
+- **backend/agents/designer.py**
   Accepts a hypothesis string and optional clarification response. Uses GPT-4o mini to detect ambiguity (primary metric, randomization unit) and, if needed, returns one clarifying question. Otherwise returns a structured design (primary_metric, guardrail_metrics, randomization_unit, runtime_days, warnings). Sample size is computed via a two-proportion z-test power formula (NumPy); no statsmodels. Adds a warning when the hypothesis mentions marketplace or two-sided platforms (SUTVA risk).
 
-- **backend/agents/monitor.py**  
-  For a given experiment and day: loads assignments and snapshots from Supabase, builds per-user rows for CUPED (using current-day snapshot rate as metric proxy when raw events are not stored), runs CUPED, SRM (assignment counts), sequential (O'Brien-Fleming with current-day means/stds), and novelty (all snapshots through that day). Writes `srm_flagged` and `novelty_flagged` back to that day’s snapshot rows, logs one row to `agent_decisions` (agent=monitor, decision=continue|escalate|stop, reasoning). Returns a MonitorResult (all result dicts plus decision and reasoning). Converts NumPy types to native Python for JSON.
+- **backend/agents/monitor.py**
+  For a given experiment and day: loads assignments and snapshots from Supabase, builds per-user rows for CUPED (using current-day snapshot rate as metric proxy when raw events are not stored), runs CUPED, SRM (assignment counts), sequential (O'Brien-Fleming with current-day means/stds), and novelty (all snapshots through that day). Writes `srm_flagged` and `novelty_flagged` back to that day's snapshot rows, logs one row to `agent_decisions` (agent=monitor, decision=continue|escalate|stop, reasoning). Returns a MonitorResult (all result dicts plus decision and reasoning). Converts NumPy types to native Python for JSON.
 
-- **backend/agents/interpreter.py**  
+- **backend/agents/interpreter.py**
   Loads assignments and agent decisions from Supabase; receives all snapshots from the caller (API fetches them). Computes final CUPED (aggregate rate per variant across all days), final SRM (total assignment counts), and final novelty over all snapshots. Sends a text summary (hypothesis, design, CUPED/SRM/novelty, recent monitor decisions) to GPT-4o mini and parses recommendation, confidence (high/medium/low), and action (ship/iterate/abandon/rerun). Logs to `agent_decisions` (agent=interpreter) and returns InterpretationResult.
 
-- **backend/graph/orchestrator.py**  
-  Defines `ExperimentState` (TypedDict), node names (designer, monitor, interpreter, escalate), and stub node functions that set `next_action`. Conditional edges: designer -> monitor; monitor -> monitor | interpreter | escalate based on state. Interpreter and escalate -> END. Used for validation and as the blueprint for a future fully wired pipeline.
+- **backend/graph/orchestrator.py**
+  Defines `ExperimentState` (TypedDict), node names (designer, monitor, interpreter, escalate), and stub node functions that set `next_action`. Defines conditional routing logic that governs all agent transitions: SRM triggers escalation, sequential boundary or runtime completion triggers interpretation, otherwise monitor loops daily. Interpreter and escalate route to END.
 
-- **backend/stats/**  
+- **backend/stats/**
   Pure functions; no Supabase or LLM. CUPED: OLS slope of metric on pre_exp_metric, adjusted metric, two-sample t-test (SciPy). SRM: observed vs expected counts, chi-square statistic by hand, p-value via `scipy.stats.chi2.sf`. Sequential: information fraction t = day/total_days, O'Brien-Fleming boundary, z-stat from means and SE(diff). Novelty: early-window lift vs overall lift ratio; flag if ratio > 1.5 and overall lift > 0 and enough days.
 
-- **backend/data/generator.py**  
+- **backend/data/generator.py**
   Configurable synthetic data: n_users (e.g. 50k), 30 pre-experiment + 30 experiment days, six event types (signup, onboarding_complete, feature_used, subscription_started, subscription_cancelled, referred_user). Pre-experiment: feature-usage count per user as `pre_exp_metric` (CUPED covariate). Assignment is 50/50; SRM is simulated by per-day observed variant (clean up to `srm_start_day`, then biased). Novelty: treatment lift boosted in first N days when `inject_novelty` is True. All randomness via a single `np.random.default_rng(seed)`. Outputs assignments and events; helper aggregates events to daily metric snapshots and can write to Supabase.
 
-- **backend/db/supabase_client.py**  
+- **backend/db/supabase_client.py**
   Singleton Supabase client from env. Functions: insert_experiment, update_experiment_status, get_experiment; insert_assignments (chunked), get_assignments (with limit); insert_snapshots (chunked), get_snapshots, update_metric_snapshot_flags; get_agent_decisions, log_agent_decision. Errors are caught, logged, and re-raised.
 
-- **backend/main.py**  
+- **backend/main.py**
   FastAPI app. Endpoints: POST /design, POST /monitor, POST /interpret, GET /experiment/{id}, POST /setup. Pydantic request bodies; responses are JSON. /setup runs the designer, creates the experiment row, generates data (GeneratorConfig from request + design.runtime_days), then insert_assignments and insert_snapshots.
 
-- **frontend/app.py**  
+- **frontend/app.py**
   Streamlit app with sidebar navigation. Pages: New Experiment (hypothesis, clarification flow, design card, setup with spinner and experiment_id + download); Monitor (experiment_id, day slider, four metric cards with color coding, decision badge, expandable reasoning); Interpret (experiment_id, hypothesis, design fields, action badge, recommendation box, final stats); Experiment History (experiment_id, load, experiment details, Plotly line chart of primary_metric_value by day for control vs treatment, agent_decisions table). Calls backend at `http://localhost:8000`; no placeholder data.
 
 ---
@@ -120,8 +119,6 @@ flowchart LR
 
 ### Orchestrator routing (LangGraph)
 
-The orchestrator defines how control moves between agents when run as a graph (stub nodes; real logic lives in the agents and is invoked via API today).
-
 ```mermaid
 stateDiagram-v2
   [*] --> Designer
@@ -134,7 +131,7 @@ stateDiagram-v2
 ```
 
 - **Designer** always advances to **Monitor** after producing a design.
-- **Monitor** reads `srm_flagged`, `should_stop`, and runtime completion to set `next_action`: if SRM, route to **Escalate**; else if stop or runtime complete, route to **Interpreter**; else route back to **Monitor** (e.g. increment day and run again).
+- **Monitor** reads `srm_flagged`, `should_stop`, and runtime completion to set `next_action`: if SRM, route to **Escalate**; else if stop or runtime complete, route to **Interpreter**; else route back to **Monitor**.
 - **Interpreter** and **Escalate** are terminal nodes (END).
 
 ### Design-to-setup flow
@@ -185,7 +182,7 @@ flowchart TD
 ```
 
 - SRM uses assignment counts (control vs treatment).
-- Sequential uses current day’s snapshot means and stds (and total_days from config).
+- Sequential uses current day's snapshot means and stds (and total_days from config).
 - Novelty uses all snapshots with `day <= current_day`.
 - Decision priority: escalate if SRM; else stop if sequential boundary recommends stop; else continue.
 
@@ -193,9 +190,9 @@ flowchart TD
 
 ## Database Schema (Supabase / PostgreSQL)
 
-| Table             | Purpose |
-|-------------------|--------|
-| **experiments**   | One row per experiment: hypothesis, primary_metric, guardrail_metrics, randomization_unit, sample_size_required, runtime_days, status, design_output (JSON), created_at. |
+| Table               | Purpose |
+|--------------------|---------|
+| **experiments**     | One row per experiment: hypothesis, primary_metric, guardrail_metrics, randomization_unit, sample_size_required, runtime_days, status, design_output (JSON), created_at. |
 | **user_assignments** | Per-experiment, per-user: experiment_id, user_id, variant (control/treatment), assigned_at, pre_exp_metric (CUPED covariate). |
 | **metric_snapshots** | Per-experiment, per-day, per-variant: day, variant, primary_metric_value, guardrail_values (JSON), sample_size, srm_flagged, novelty_flagged, sequential_boundary, created_at. |
 | **agent_decisions** | Audit log: experiment_id, agent (designer|monitor|interpreter), decision, reasoning, created_at. |
@@ -236,13 +233,9 @@ SUPABASE_KEY=<your_supabase_anon_key>
 
 ### Install dependencies
 
-From the project root:
-
 ```bash
 pip install -r requirements.txt
 ```
-
-If `requirements.txt` is missing, install at least: `fastapi`, `uvicorn`, `streamlit`, `httpx`, `pydantic`, `python-dotenv`, `openai`, `supabase`, `numpy`, `scipy`, `pandas`, `plotly`, `langgraph`.
 
 ### Run backend
 
@@ -273,9 +266,76 @@ All of the above use minimal dependencies (NumPy for algebra, SciPy only for CDF
 
 ---
 
-## Push to GitHub
+## Design Tradeoffs
 
-From the project root:
+Every architectural decision in this system involves a tradeoff. These are documented explicitly because they are the most likely interview probes.
+
+**CUPED uses group-level rates as per-user metric proxy**
+The monitor agent builds CUPED rows using the snapshot-level conversion rate (one rate per variant per day) rather than individual user outcomes. This is a simplification — true CUPED requires per-user outcome data. The tradeoff: it keeps the storage schema simple (snapshots rather than per-user daily events) at the cost of reduced variance reduction. In production, per-user daily outcomes would be stored and CUPED would operate on individual rows. The current approach is documented as a known limitation.
+
+**OLS slope instead of sklearn LinearRegression for CUPED**
+sklearn would produce identical results with less code. The choice of NumPy normal equations is deliberate: it forces explicit understanding of the theta computation and makes the implementation fully transparent to interviewers probing the math. The cost is approximately five extra lines of code.
+
+**O'Brien-Fleming boundaries are one-sided**
+The sequential testing implementation checks `z_stat >= z_boundary` (treatment better than control) but not `z_stat <= -z_boundary` (treatment worse). This means the system will not recommend early stopping for a strongly negative treatment effect. In production, two-sided stopping rules would be standard. Flagged as a known simplification in the stats engine.
+
+**Synthetic data aggregates to snapshots, not raw events**
+The generator produces user-level events but the pipeline immediately aggregates them to daily metric snapshots before writing to Supabase. This reduces storage cost and query complexity but loses the ability to do per-user analysis (e.g. survival analysis, individual-level CUPED, segmentation). A production system would store raw events in a warehouse and compute snapshots on query.
+
+**LangGraph nodes are stubs wired to real agents via FastAPI**
+The orchestrator defines correct conditional routing logic but the node functions call the real agents through the API layer rather than being fully integrated. The tradeoff is operational: running agents as API endpoints makes them independently testable, deployable, and observable. A fully wired LangGraph pipeline would be appropriate for an async, long-running workflow but adds complexity for a portfolio demonstration.
+
+**One round of LLM clarification maximum**
+The designer agent asks at most one clarifying question before proceeding. A real system might benefit from multi-turn clarification for complex hypotheses. The single-round limit avoids UI complexity and LLM cost while still catching the most common ambiguities (metric definition and randomization unit).
+
+**GPT-4o mini over Claude or GPT-4o**
+GPT-4o mini was chosen for cost efficiency. At this inference volume (3 LLM calls per experiment lifecycle) the total cost is under $0.01 per experiment. The quality is sufficient for structured JSON extraction and plain-English synthesis. A production system serving high-volume teams might benefit from a more capable model for the interpreter's recommendation reasoning.
+
+**SRM detection uses total assignment counts, not per-day counts**
+The SRM check compares total assignments (control vs treatment) rather than observing drift in the assignment ratio over time. This catches persistent SRM but may miss transient logging bugs that self-correct. A more robust implementation would run the chi-square test on each day's new assignments and flag when the ratio drifts from expected on a rolling basis.
+
+---
+
+## Path to Production
+
+This system is built for portfolio demonstration and is not production-ready. The following changes would be required to operate it at scale inside a real growth team.
+
+**Per-user event storage**
+Replace snapshot aggregation with raw event storage in a data warehouse (Snowflake, BigQuery, or Redshift). This enables per-user CUPED, survival analysis, behavioral segmentation, and experiment-level debugging. The current schema loses individual-level signal by aggregating immediately.
+
+**Real traffic assignment, not synthetic data**
+Replace the synthetic generator with a real assignment service: an API that assigns users to variants on first exposure, persists the assignment, and logs the event. The current system generates fake data; a production system integrates with product instrumentation (Segment, Amplitude, Mixpanel, or a custom event pipeline).
+
+**Async monitoring pipeline**
+The monitor currently runs on demand (API call per day). In production, monitoring would run on a schedule (Airflow DAG, cron, or Prefect flow) that processes each live experiment daily, writes snapshots, and sends alerts when SRM or sequential boundaries are triggered. The LangGraph orchestrator is already designed for this transition.
+
+**Authentication and multi-tenancy**
+The current system has no authentication. A production deployment would require user authentication (OAuth or SSO), experiment ownership, team-level access controls, and row-level security in Supabase so teams only see their own experiments.
+
+**LLM output validation and fallback**
+The designer and interpreter parse LLM JSON responses with basic try/except. In production, structured outputs should be validated against a Pydantic schema with explicit fallback behavior when the model produces malformed output. OpenAI's structured outputs API (JSON mode with schema enforcement) would replace the current regex-based parsing.
+
+**Two-sided sequential testing**
+The current O'Brien-Fleming implementation is one-sided. Production sequential testing requires two-sided boundaries so that strongly negative treatment effects also trigger early stopping, preventing harm to users in the treatment group.
+
+**Network effect and interference detection**
+The current system warns when a hypothesis mentions a marketplace but does not implement interference-robust experiment designs (switchback testing, cluster randomization, or synthetic control). For two-sided platforms or social products, SUTVA violations can invalidate standard A/B results entirely. A production system would route marketplace experiments to specialized design templates.
+
+**Experiment interaction detection**
+When multiple experiments run simultaneously on overlapping user populations, they can interact — a user in treatment for experiment A and treatment for experiment B creates a confounded cell. The current system has no awareness of concurrent experiments. Production systems (like Airbnb's ERF or Meta's PlanOut) include experiment registry checks and mutual exclusion logic.
+
+**Scalable CUPED with per-user outcomes**
+The current CUPED implementation uses group-level snapshot rates as a proxy for per-user outcomes. At scale, CUPED should operate on individual user rows with their actual outcome values (converted: 1, not converted: 0) and a continuous pre-experiment covariate. This requires per-user event storage and a vectorized implementation that handles 10M+ rows efficiently.
+
+**CI/CD and containerization**
+The current backend runs as a local uvicorn process. Production deployment requires Docker containerization, a CI/CD pipeline (GitHub Actions), environment-specific config management, health checks, and horizontal scaling behind a load balancer. Cloud Run (GCP) or ECS (AWS) are appropriate targets given the stateless FastAPI architecture.
+
+**Monitoring and observability**
+No application-level monitoring exists today. Production requirements include: API latency tracking, LLM call success/failure rates, Supabase query performance, error alerting, and experiment-level audit logs beyond the current agent_decisions table.
+
+---
+
+## Push to GitHub
 
 ```bash
 git init
