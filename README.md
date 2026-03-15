@@ -1,6 +1,6 @@
 # Growth Experimentation Copilot
 
-A production-oriented agentic system for designing, monitoring, and interpreting A/B experiments using natural language. Built for portfolio and technical interview contexts: the statistics layer is implemented from first principles, agent routing is conditional (LangGraph), and the LLM is used for reasoning and synthesis, not only text generation.
+A production-oriented agentic system for designing, monitoring, and interpreting A/B experiments using natural language. The statistics layer is implemented from first principles, agent routing is conditional (LangGraph), and the LLM is used for reasoning and synthesis, not only text generation.
 
 ---
 
@@ -268,13 +268,13 @@ All of the above use minimal dependencies (NumPy for algebra, SciPy only for CDF
 
 ## Design Tradeoffs
 
-Every architectural decision in this system involves a tradeoff. These are documented explicitly because they are the most likely interview probes.
+Every architectural decision in this system involves a tradeoff.
 
 **CUPED uses group-level rates as per-user metric proxy**
 The monitor agent builds CUPED rows using the snapshot-level conversion rate (one rate per variant per day) rather than individual user outcomes. This is a simplification — true CUPED requires per-user outcome data. The tradeoff: it keeps the storage schema simple (snapshots rather than per-user daily events) at the cost of reduced variance reduction. In production, per-user daily outcomes would be stored and CUPED would operate on individual rows. The current approach is documented as a known limitation.
 
 **OLS slope instead of sklearn LinearRegression for CUPED**
-sklearn would produce identical results with less code. The choice of NumPy normal equations is deliberate: it forces explicit understanding of the theta computation and makes the implementation fully transparent to interviewers probing the math. The cost is approximately five extra lines of code.
+sklearn would produce identical results with less code. The choice of NumPy normal equations is deliberate as it forces explicit understanding of the theta computation and makes the implementation fully transparent. The cost is approximately five extra lines of code.
 
 **O'Brien-Fleming boundaries are one-sided**
 The sequential testing implementation checks `z_stat >= z_boundary` (treatment better than control) but not `z_stat <= -z_boundary` (treatment worse). This means the system will not recommend early stopping for a strongly negative treatment effect. In production, two-sided stopping rules would be standard. Flagged as a known simplification in the stats engine.
